@@ -1,0 +1,508 @@
+seed.val = 376
+set.seed(seed.val)
+# Set Up ----
+
+## Libraries ----
+library(tidyr)
+#library(plyr, include.only = "rbind.fill")
+library(dplyr)
+library(tibble)
+library(stringr)
+library(phyloseq)
+library(ggplot2)
+library(grid)
+library(gridExtra)
+library(ggview)
+library(survival)
+library(ggpubr)
+library(ggh4x)
+
+library(ggalt)
+library(MetBrewer)
+
+
+
+## Load Data ----
+load("../data/resultsBaseline.RData")
+load("../data/resultsCycle2.RData")
+
+
+## Define Functions ----
+#for DA prep function
+source("DA_plot_wrapper.R")
+
+norm.fxn = function(features, object){
+  obj.tmp = object
+  type.tmp = obj.tmp$input$FeatureType
+  if(type.tmp == "Taxonomic"){
+    print("doing Taxonomic...")
+    #get unpruned feature df
+    df.tmp = obj.tmp$input$Phyloseq %>% otu_table() %>% data.frame() %>% t()
+    rownames(df.tmp) = gsub(pattern = "\\.", replacement = "-", x = rownames(df.tmp))
+    
+    #grab depth before anything else
+    depth.tmp = colSums(df.tmp)
+    #winsorize (counts)
+    df.tmp = apply(df.tmp, MARGIN = 1, function(x){
+      qt = quantile(x, 1-0.03)
+      x[x >= qt] <- qt
+      return(x)
+    }) %>% t()
+    
+    #TSS (based on unpruned feature matrix)
+    df.tmp = t(df.tmp)/depth.tmp
+    df.tmp = df.tmp %>% data.frame()
+    
+  } else if (type.tmp =="Functional"){
+    print("doing Functional...")
+    df.tmp = obj.tmp$output$test.object$feature.dat
+    
+    #TSS (based on pruned feature matrix)
+    df.tmp = t(df.tmp)/colSums(df.tmp)
+    df.tmp = df.tmp %>% data.frame()
+    
+    #winsorize
+    df.tmp = apply(t(df.tmp), MARGIN = 1, function(x){
+      qt = quantile(x, 1-0.03)
+      x[x >= qt] <- qt
+      return(x)
+    }) %>% data.frame()
+  }
+  #square root
+  df.tmp = df.tmp^0.5
+  
+  #select features of interest
+  df.tmp = df.tmp %>% rownames_to_column(var = "SAMPLEID") %>% select(all_of(c("SAMPLEID", features)))
+  op = df.tmp
+  return(op)
+  
+}
+
+
+# (Fig A) Time Plots ----
+list.w = time.output[c("PROMISE_Time_Taxonomic_Genus")]
+list.w = lapply(list.w, function(obj.tmp){
+  op = da_plt_prep(obj = obj.tmp, type = "auto", cuts = c(0.05, 0.1),
+                   label.crit = c("x < 0.1"), ntop = 10)
+})
+
+list.w = lapply(list.w, function(obj.tmp){
+  #get features to plt
+  foi = obj.tmp$df %>% filter(padj < 0.1) %>% select(Feature_W) %>% unlist() %>% as.vector()
+  norm.tmp = norm.fxn(features = foi, object = obj.tmp$obj)
+  op = c(obj.tmp, "df.norm" = list(norm.tmp))
+  return(op)
+})
+
+
+df.4a = lapply(list.w, function(obj.tmp){
+  #grab results df and metadata
+  res.df = obj.tmp$df %>% filter(padj < 0.1)
+  md.tmp = obj.tmp$obj$input$Phyloseq %>% sample_data() %>% data.frame()
+  #grab features of interest
+  foi = obj.tmp$df %>% filter(padj < 0.1) %>% select(Feature_W) %>% unlist() %>% as.vector()
+  
+  #put features and metadata together
+  #subset down to features of interest, sampleid, and pfs columns
+  toget = c("SAMPLEID", "SAMPLEVISITTPDESC_factor", "ANALYSISID", foi)
+  df.plt = obj.tmp$df.norm
+  df.plt = right_join(md.tmp, df.plt, by = "SAMPLEID") %>%
+    select(all_of(toget))
+  df.plt$SAMPLEVISITTPDESC_factor = as.character(df.plt$SAMPLEVISITTPDESC_factor)
+  df.plt$SAMPLEVISITTPDESC_factor = factor(ifelse(df.plt$SAMPLEVISITTPDESC_factor == "pre_reg", yes = "Pre-Treatment", no = "Cycle2"), levels = c("Pre-Treatment", "Cycle2"), ordered = T)
+  return(df.plt)
+})
+df.4a = df.4a$PROMISE_Time_Taxonomic_Genus %>% arrange(SAMPLEVISITTPDESC_factor)
+df.4a$posnudge = c(rep(0.02, times = 25), rep(-0.02, times = 25))
+
+
+#  re-arranging
+plt.4a= data.frame(ID =unique( df.4a$ANALYSISID), stringsAsFactors=F)
+plt.4a$PreTreatment=rep(0, nrow(plt.4a))
+plt.4a$Cycle2=rep(0, nrow(plt.4a))
+
+for (i in 1:nrow(plt.4a)) {
+   plt.4a$PreTreatment[i]= df.4a$g__Lactococcus_A[df.4a$ANALYSISID==plt.4a$ID[i] & df.4a$SAMPLEVISITTPDESC_factor=='Pre-Treatment']
+   plt.4a$Cycle2[i]= df.4a$g__Lactococcus_A[df.4a$ANALYSISID==plt.4a$ID[i] & df.4a$SAMPLEVISITTPDESC_factor=='Cycle2']
+}
+
+load('../data/clinical_data.RData')
+
+clin=clinical_data[ clinical_data$ANALYSISID %in%plt.4a$ID,]
+clin= clin[ clin$SAMPLEVISITTPDESC=='pre_reg',]
+
+plt.4a$Stat=rep(0, nrow(plt.4a))
+
+for (i in 1:nrow(plt.4a)) {
+   plt.4a$Stat[i]= clin$prereg_pfsstat[clin$ANALYSISID==plt.4a$ID[i]]
+}
+
+
+x=plt.4a$Cycle2- plt.4a$PreTreatment
+ix=sort(x,decreasing=T, index.return=T)$ix
+
+plt.4a$ID=factor(plt.4a$ID, levels=plt.4a$ID[ix])
+
+plt.4a$Stat=factor(plt.4a$Stat, levels=c(0,1), labels=c('pCR','Recurrence') )
+
+
+rdn=met.brewer('Redon',12)
+
+
+fig.4a=ggplot(plt.4a, aes(y = ID, x = PreTreatment, xend = Cycle2)) +
+  geom_dumbbell(aes(shape=Stat), color=rdn[11], size = .35, dot_guide = FALSE, size_x = 1.25, size_xend = 1.25, colour_x = rdn[3], colour_xend = rdn[12])+
+  labs(tag = "A", y='Samples', x='Lactococcus A (change)') +theme_void()+
+  theme(legend.position = "inside", legend.position.inside=c(.85,.25), legend.title = element_blank(),legend.text = element_text(size = 3.5),
+#theme(legend.position = "right", legend.title = element_blank(),legend.text = element_text(size = 4),
+        #legend.background = element_rect(color = rdn[3], linewidth = 0.25, fill = "white"),
+        legend.key.size = unit(1, "mm"),
+        aspect.ratio = NULL, 
+        axis.title.x = element_text(size = 9, margin = margin(t = 0.25, unit = "mm")), 
+        axis.title.y = element_text(size = 9, angle=90, margin = margin(r = 1, unit = "mm")),
+        axis.text.x = element_text(size = 6, color = "black", margin = margin(t=0, unit = "mm")),
+        axis.text.y = element_blank(),
+        axis.line = element_line(linewidth = unit(0.25, units = "mm")),
+        axis.ticks = element_line(linewidth = unit(0.25, units = "mm")),
+        plot.tag =element_text(size = 10, hjust = .5, vjust = 0.5, margin=margin(0,0,0,0, unit = "mm")),
+        plot.tag.location = "plot", 
+        plot.tag.position = c(0,1),
+        plot.margin = margin(t=.5, r=0.5, b=0.5, l = .5, unit = "mm"))+
+        guides(shape = guide_legend(override.aes = list(size = 1.3, color=rdn[11])))
+
+fig.4a + canvas(width = 59, height = 35, units = "mm", dpi = 300)
+
+
+
+
+
+#grab results of interest
+list.w = output[c("PROMISE_cycle2_age_Taxonomic_Genus", "PROMISE_cycle2_age_Functional_Pathway", "PROMISE_cycle2_age_Functional_EC", "PROMISE_cycle2_age_Functional_KO")]
+
+list.w = lapply(list.w, function(obj.tmp){
+  op = da_plt_prep(obj = obj.tmp, type = "auto", cuts = c(0.05, 0.1),
+                   label.crit = c("x < 0.1"), ntop = 10)
+})
+
+
+list.w = lapply(list.w, function(obj.tmp){
+  #get features to plt
+  foi = obj.tmp$df %>% filter(padj < 0.1) %>% select(Feature_W) %>% unlist() %>% as.vector()
+  norm.tmp = norm.fxn(features = foi, object = obj.tmp$obj)
+  op = c(obj.tmp, "df.norm" = list(norm.tmp))
+  return(op)
+})
+
+
+
+
+
+## KM Plotting ----
+
+
+
+    xlabs = "Time (Months)"
+    ylabs = "P(Surv)"
+    xbr = c(0, 24, 48)
+    ybr = c(0, 0.5, 1)
+    xlims = c(0, max(xbr))
+    ylims = c(0,1)
+
+
+### Raw Plot & Initial Formatting----
+km.raw = lapply(list.w, function(obj.tmp){
+  #grab results df and metadata
+  res.df = obj.tmp$df %>% filter(padj < 0.1)
+  md.tmp = obj.tmp$obj$input$Phyloseq %>% sample_data() %>% data.frame()
+  #specify time and event columns
+  timecol = obj.tmp$obj$input$timecol
+  eventcol = obj.tmp$obj$input$eventcol
+  #grab features of interest
+  foi = obj.tmp$df %>% filter(padj < 0.1) %>% select(Feature_W) %>% unlist() %>% as.vector()
+  
+  #put features and metadata together
+  #subset down to features of interest, sampleid, and pfs columns
+  toget = c("SAMPLEID", timecol, eventcol, foi)
+  df.plt = obj.tmp$df.norm
+  df.plt = right_join(md.tmp, df.plt, by = "SAMPLEID") %>%
+    select(all_of(toget))
+  df.plt = df.plt %>% mutate(across(all_of(foi), .fns = ~factor(ifelse(.x >= median(.x), yes = "\u2265 Median", no = "< Median"), levels = c("< Median", "\u2265 Median"))))
+  
+  fit.list = lapply(foi, function(feat.tmp){
+    #formula and fit curve
+    form.tmp = paste0('Surv(time = ', timecol, ", event = ", eventcol, ") ~ ", feat.tmp) %>% as.formula()
+    set.seed(seed.val)
+    fit.tmp = survfit(formula = form.tmp, data = df.plt)
+    
+    #plot set up
+    times <- fit.tmp$time
+    title.tmp = res.df[res.df$Feature_W == feat.tmp,"Feature_Clean"] %>% unlist() %>% as.vector()
+    
+    #add signif if necessary
+    char.add = ""
+    if((res.df[res.df$Feature_W == feat.tmp,"padj"] %>% unlist() %>% as.vector()) < 0.05){
+      char.add = ' \u2020' #" \u2051" # " \u2193"
+    }
+    if((res.df[res.df$Feature_W == feat.tmp,"padj"] %>% unlist() %>% as.vector()) < 0.1 & (res.df[res.df$Feature_W == feat.tmp,"padj"] %>% unlist() %>% as.vector()) >= 0.05){
+      char.add = " \u2a"
+    }
+    title.tmp = paste0(title.tmp, char.add)
+    
+    #df.plot initialization
+    subs1 <- 1:length(levels(summary(fit.tmp)$strata))
+    subs2 <- 1:length(summary(fit.tmp,censored=T)$strata)
+    subs3 <- 1:length(summary(fit.tmp,times = times,extend = TRUE)$strata)
+    
+    #format groups
+    raw.group = summary(fit.tmp, censored = T)$strata[subs2] %>% as.character()
+    equal.ind = gregexpr(pattern = "=", text = raw.group) %>% unlist()
+    format.group = str_sub(raw.group, start = equal.ind+1, end = nchar(raw.group))
+    lvl.strata = format.group %>% unique()
+    lvl.all = c(lvl.strata, paste0(lvl.strata, "XYZ"))
+    Factor = factor(format.group, levels = lvl.all)
+    
+    .df = data.frame(
+      time = fit.tmp$time[subs2],
+      n.risk = fit.tmp$n.risk[subs2],
+      n.event = fit.tmp$n.event[subs2],
+      n.censor = fit.tmp$n.censor[subs2],
+      surv = fit.tmp$surv[subs2],
+      strata = Factor,
+      upper = fit.tmp$upper[subs2],
+      lower = fit.tmp$lower[subs2]
+    )
+    zeros = data.frame(
+      time = 0,
+      n.risk = NA,
+      n.event = NA,
+      n.censor = NA,
+      surv = 1,
+      strata = factor(levels(Factor)[1:2], levels = levels(Factor)),
+      upper = 1,
+      lower = 1
+    )
+    .df = rbind.data.frame(zeros, .df)
+    .df$col.pt = factor(paste0(.df$strata %>% as.character(), "XYZ"), levels = levels(.df$strata))
+    #.df$title.col = paste0(" \n", title.tmp , "\n ")
+    .df$title.col = title.tmp
+    
+    .df$col.pt = as.numeric(.df$col.pt)-2
+    .df$col.pt = c("#308692","#5d7c22")[.df$col.pt]
+    op = .df
+  })
+  df.master = do.call(rbind.data.frame, fit.list)
+  df.master$title.col = factor(df.master$title.col, levels = unique(df.master$title.col), ordered = T)
+  
+  #set number of rows
+  param.nrow = 1
+  if(length(fit.list) < 3){
+    param.nrow = 1
+    param.ncol = ceiling(length(fit.list)/param.nrow)
+    if(length(fit.list) == 1){
+      des.tmp = "A"
+    } else{
+      des.tmp = "AB"
+    }
+  param.panel.width = 32
+  param.panel.height = 20
+
+  }
+  if(length(fit.list) > 2 & length(fit.list) < 7){
+    param.nrow = 1
+    param.ncol = 6
+    des.tmp = "ABCDEF"
+  param.panel.width = 24
+  param.panel.height = 17.25
+
+  }
+  if(length(fit.list) > 6){
+    param.nrow = 3
+    param.ncol = 4
+    des.tmp = "
+    ABCD
+    EFGH
+    IJK#"
+  param.panel.width = 32
+  param.panel.height = 20
+
+  }
+  #set number of cols
+  #param.ncol = ceiling(length(fit.list)/param.nrow)
+
+  
+  plt.init = ggplot(df.master, aes(time, surv)) +
+    geom_step(aes(color = strata), linewidth = 0.4) +
+    geom_point(data = subset(df.master, n.censor >= 1), aes(x = time, y = surv),  shape = 2, size = 3, stroke = 0.6, color = subset(df.master, n.censor >= 1)$col.pt) +
+    scale_x_continuous(xlabs, breaks = xbr, limits = xlims) +
+    scale_y_continuous(ylabs, breaks = ybr, limits = ylims) +
+    facet_manual(.~title.col, design = des.tmp) +
+    force_panelsizes(rows = unit(x = rep(param.panel.height, times = param.nrow), units = "mm"),
+                     cols = unit(x = rep(param.panel.width, times = param.ncol), units = "mm")) +
+    theme_pubr(border = T)
+  
+  
+  #linewidth and size of censor mark
+  plt.init$layers[[1]]$aes_params$linewidth = 0.5
+  plt.init$layers[[2]]$aes_params$size = 0.55
+  
+  plt.master = plt.init +
+    scale_color_manual(values = c(rdn[3], rdn[12])) +
+    theme(legend.position = "none",
+          plot.title = element_text(size = 10, hjust = 0.5, face="bold", color = "black", margin = margin(b = 0.5, unit = "mm")),
+          strip.text.x = element_text(size = 8, margin = margin(t = 0.25, b = 0.25, r = 0, l = 0, unit = "mm")),
+          strip.background.x = element_rect(linewidth = 0.25),
+          panel.border = element_rect(linewidth = 0.25),
+          panel.spacing.x = unit(0.5, units = "mm"),
+          panel.spacing.y = unit(0.5, units = "mm"),
+          axis.title.x = element_text(size = 9, color = "black", margin = margin(t=0, unit = "mm")),
+          axis.title.y = element_text(size = 9, color = "black", margin = margin(r = 0, unit = "mm")),
+          axis.text.x = element_text(size = 7, color = "black", margin = margin(t = 0.1, unit = "mm")),
+          axis.text.y = element_text(size = 7, color = "black", margin = margin(r = 0.1, unit = "mm")),
+          axis.line = element_line(linewidth = unit(0, units = "mm")),
+          axis.ticks = element_line(linewidth = unit(0.25, units = "mm")),
+          axis.ticks.length = unit(0.5, units = "mm"),
+          plot.margin = margin(t=1., r=0.75, b=0.5, l = 0.75, unit = "mm"),
+          plot.background = element_rect(fill = "white"))
+  
+  return(plt.master)
+})
+
+
+km.raw[[3]]
+km.raw[[3]] + canvas(height = 29, width = 169.5, units = "mm", dpi = 300)
+km.raw[[4]] + canvas(height = 74, width = 169.5, units = "mm", dpi = 300)
+km.raw[[4]]
+
+
+### Margins ----
+w.vec = c(40-1, 74-2, 170, 170)
+h.vec = c(28+1, 28+1, 28+1, 73+1)
+km.postmargin = km.raw
+km.postmargin[[1]] = km.postmargin[[1]] + theme(plot.margin = margin(t=.5, 
+                                                                     r=0.75, 
+                                                                     b=0.5, 
+                                                                     l = 0.5, unit = "mm"))
+km.postmargin[[2]] = km.postmargin[[2]] + theme(plot.margin = margin(t=.5, 
+                                                                     r=0.75, 
+                                                                     b=0.5, 
+                                                                     l = 0.5, unit = "mm"))
+km.postmargin[[3]] = km.postmargin[[3]] + theme(plot.margin = margin(t=.5, 
+                                                                     r=.5, 
+                                                                     b=0.5, 
+                                                                     l = .5, unit = "mm"))
+km.postmargin[[4]] = km.postmargin[[4]] + theme(plot.margin = margin(t=.5, 
+                                                                     r=0.5, 
+                                                                     b=0.5, 
+                                                                     l = .5, unit = "mm"))
+
+
+### Add Tags ----
+#get labels
+lab.vec = LETTERS[2:5]
+
+#add tags (finally)
+km.format = lapply(1:length(km.postmargin), function(i){
+  plt.tmp = km.postmargin[[i]]
+  lab.tmp = lab.vec[i]
+  plt.tmp = plt.tmp +
+    labs(tag = lab.tmp) +
+    theme(plot.tag = element_text(size = 10, hjust = 0.5, vjust = 0.5, margin=margin(0,0,0,0, unit = "mm")),
+          plot.tag.location = "plot",
+          plot.tag.position = c(0,1))
+  return(plt.tmp)
+})
+
+# Legends ----
+
+## KM Plot Legend ----
+
+### Dummy Plot ----
+df.km.leg = data.frame("xpos" = c(0,1,2,3,0,1,2,3),
+                       "ypos" = c(0,1,2,3,1,2,3,4),
+                       "col" = factor(c(rep("< Median Abundance", 4), rep("\u2265 Median Abundance", 4)), levels = c("< Median Abundance", "\u2265 Median Abundance"), ordered = T))
+df.text = data.frame(
+  x = c(1.5, 2, 2.5),
+  y = c(2.5, 2, 1.5),
+  shape.col = factor(c("Censored", "q < 0.05", "q < 0.1"), ordered = T, levels = c("Censored", "q < 0.05", "q < 0.1")))
+
+dummy.legend.km = ggplot() + 
+  geom_path(data = df.km.leg, aes(x = xpos, y = ypos, color = col)) + 
+  theme_pubr() + 
+  geom_point(data = df.text, aes(x = x, y = y, shape = shape.col), size = 3, color = "black", stroke = c(5, 0.5, 0.5)) +
+  scale_color_manual(values = c(rdn[3], rdn[12]),  guide = guide_legend(order =1),) + 
+  scale_shape_manual(values = c("\u2b","\u2020", "\u2a"), guide = guide_legend(order =2) ) 
+dummy.legend.km
+
+### Format ----
+
+dummy.format.legend.km = dummy.legend.km + 
+  theme(legend.title = element_blank(),
+        legend.text = element_text(size = 9, margin = margin(t = 0, r = 0, b = 0, l = 0, unit = "mm")),
+        legend.margin = margin(t = 0, r = 0, b = 0, l = 0, unit = "mm"),
+        legend.box.spacing = unit(0, "mm"),
+        legend.box.margin = margin(t = 0, r = 0, b = 0, l = 0, unit = "mm"),
+        legend.key.height = unit(3, "mm"),
+        legend.key.width = unit(4, "mm"),
+        legend.direction = "vertical",
+        legend.position = "right")+guides(color=guide_legend(override.aes = list(linewidth = 1.25)))
+dummy.format.legend.km
+
+
+
+        guides(shape = guide_legend(override.aes = list(size = 1.3, color=rdn[11])))
+### Extract Legend ----
+
+#grab legend
+legend.km = dummy.format.legend.km %>% 
+  get_legend()
+legend.km = legend.km %>% 
+  as_ggplot()
+
+#final touches 
+legend.km = legend.km +
+  theme(plot.margin = margin(t = 0, r = -1, b = 0, l = -5, unit = "mm"))
+
+#check size
+legend.km + canvas(height = 74, width = 34, units = "mm", dpi = 300)
+
+# Print to PNG ----
+
+
+## Layout Matrix with bumper ----
+w.vec
+h.vec
+
+layout.mat = matrix(data = NA, nrow = 138, ncol = 170)
+layout.mat[5:34, 5:45] = 1 # Lacto
+layout.mat[5:34, 55:93] = 2 #genus
+layout.mat[5:34, 99:165] = 3 #pw1 and 2
+layout.mat[35:65, 5:170] = 4 # ec plot
+layout.mat[70:138, 5:137] = 5 # ko plts
+layout.mat[120:135, 118:170] = 6 # km plt legend
+#layout.mat[30:35, 60:170] = 7 #plt. spacer
+gs <- lapply(1:6, function(ii)
+  grobTree(rectGrob(gp=gpar(fill=ii, alpha=0.5)), textGrob(ii)))
+grid.arrange(grobs = gs, layout_matrix = layout.mat)
+
+
+
+
+## Plot List ----
+#spacer set up
+plt.spacer = ggplot() + theme_void()
+#plot list
+list.grob = c(list(fig.4a),
+              km.format,
+              list(legend.km))
+list.grob = lapply(list.grob, ggplotGrob)
+
+# list(plt.spacer)
+
+png("../figures/Figure.png", 
+    width = 170, 
+    height = 138, 
+    res = 300, 
+    units = "mm")
+grid.arrange(grobs = list.grob, layout_matrix = layout.mat)
+dev.off()
+
+

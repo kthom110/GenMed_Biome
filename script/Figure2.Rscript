@@ -1,0 +1,766 @@
+
+# Set Up ----
+
+## Libraries ----
+
+library(tidyr)
+library(dplyr)
+library(tibble)
+library(stringr)
+library(phyloseq)
+library(ggplot2)
+library(ggpp)
+library(grid)
+library(gridExtra)
+library(ggfx)
+
+library(ggpubr)
+library(ggview)
+
+## Load Data ----
+load("../data/resultsBC")
+
+#output = output$Stage_age
+## Define Functions ----
+
+#load da plotting
+source("DA_plot_wrapper.R")
+
+#define functions for doing the insets
+get_lims = function(plt, abs.dim = F){
+  y.vec = layer_scales(plt)$y$get_limits()
+  x.vec = layer_scales(plt)$x$get_limits()
+  if(abs.dim == T){
+    y.vec = abs(y.vec[1] - y.vec[2])
+    x.vec = abs(x.vec[1] - x.vec[2])
+  }
+  op = list("x" = x.vec, "y" = y.vec)
+  return(op)
+}
+
+get_window = function(x, y, bl.x, bl.y, plt){
+  input.x = get_lims(plt, abs.dim = T)$x
+  input.y = get_lims(plt, abs.dim = T)$y
+  
+  origin.x = get_lims(plt, abs.dim = F)$x[1]
+  origin.y = get_lims(plt, abs.dim = F)$y[1]
+  
+  op = list("xmin" =  (bl.x*input.x) + origin.x,
+            "xmax" = (input.x*(bl.x + x)) + origin.x,
+            "ymin" = (bl.y*input.y) + origin.y,
+            "ymax" = (input.y*(bl.y + y)) + origin.y)
+  
+  return(op)
+}
+
+get_abund = function(feature.dat, type = "count"){
+  if(type == "proportion"){
+    abund = feature.dat
+  }
+  if(type ==  "count"){
+    abund = t(t(feature.dat)/colSums(feature.dat))
+  }
+  meanabund  = apply(abund, 1, function(x) mean(x))
+  return(meanabund)
+}
+
+
+norm.fxn = function(object){
+  obj.tmp = object
+  type.tmp = obj.tmp$input$FeatureType
+  if(type.tmp == "Taxonomic"){
+    print("doing Taxonomic...")
+    #get unpruned feature df
+    df.tmp = obj.tmp$input$Phyloseq %>% otu_table() %>% data.frame() %>% t()
+    rownames(df.tmp) = gsub(pattern = "\\.", replacement = "-", x = rownames(df.tmp))
+    
+    #grab depth before anything else
+    depth.tmp = colSums(df.tmp)
+    #winsorize (counts)
+    df.tmp = apply(df.tmp, MARGIN = 1, function(x){
+      qt = quantile(x, 1-0.03)
+      x[x >= qt] <- qt
+      return(x)
+    }) %>% t()
+    
+    #TSS (based on unpruned feature matrix)
+    df.tmp = t(df.tmp)/depth.tmp
+    df.tmp = df.tmp %>% data.frame()
+    
+  } else if (type.tmp =="Functional"){
+    print("doing Functional...")
+    df.tmp = obj.tmp$output$test.object$feature.dat
+    
+    #TSS (based on pruned feature matrix)
+    df.tmp = t(df.tmp)/colSums(df.tmp)
+    df.tmp = df.tmp %>% data.frame()
+    
+    #winsorize
+    df.tmp = apply(t(df.tmp), MARGIN = 1, function(x){
+      qt = quantile(x, 1-0.03)
+      x[x >= qt] <- qt
+      return(x)
+    }) %>% data.frame()
+  }
+  #square root
+  df.tmp = df.tmp^0.5
+  
+  #select features of interest
+  #df.tmp = df.tmp %>% rownames_to_column(var = "SAMPLEID") %>% select(all_of(c("SAMPLEID", features)))
+  op = df.tmp
+  return(op)
+  
+}
+## Parameter Set Up ----
+
+### Fig2A Params ----
+a.pt.sz = 1.4  # a.pt.sz = 1
+#a.pal = c("#6551CCFF", "#BFB2FFFF")
+a.pal = c("#98ab76", "#c62320")
+a.axis.title.sz = 9  # a.axis.title.sz = 5
+a.axis.text.sz = 7   #a.axis.text.sz = 5  uses da.xlab.sz instead
+a.legend.text.sz = 8 # a.legend.text.sz = 7
+a.legend.title.sz = 10 # added
+a.plt.title.hjust = 0.5
+a.plt.title.vjust = -3
+a.plt.title.sz = 8   #a.plt.title.sz = 6
+a.p.annotx = Inf
+a.p.annoty = -Inf
+a.p.hjust = 1
+a.p.vjust = -1
+a.p.sz = 3   # not f* used
+a.caption.sz = 10  # not f* used
+a.caption.hjust = 0.5
+
+### DA Params (2b-2f) ----
+
+#pal.master = c("#45812f","#8AB833","#d83e65","#E57E7E","gray75")
+#da.pal.master = c("#d83e65","#eea8ba", "#45812f","#8AB833","gray75")
+#da.pal.master = c("#c62320", "#f78462", "#47632a", "#ced1af","gray75")
+da.pal.master = c("#c62320", "#f05b43", "#98ab76", "#ced1af","gray75")
+
+
+
+names(da.pal.master) = c("Positive & padj < 0.05", "Positive & padj ≥ 0.05 & padj < 0.1",
+                         "Negative & padj < 0.05", "Negative & padj ≥ 0.05 & padj < 0.1",
+                         "ns")
+da.pt.size = 1.4  #1.2
+da.legend.tf = F
+da.xlab.sz = 10  # da.xlab.sz = 5
+da.ylab.sz = 10  # da.ylab.sz = 5
+plt.axis.sz=9 # added
+da.tick.sz = 5
+da.label.size.param = 1.65
+da.max.overlaps.param = Inf
+da.max.iter.param = 10000
+da.max.time.param = 0.5
+da.force.param = 1.4 #da.force.param = 1
+da.force.pull.param = 1
+#da.ylab.vjust = 0
+da.box.pad.size = 0.5
+da.point.pad.size = unit(0.3, units = "mm")  #da.point.pad.size = unit(0.25, units = "mm")
+
+
+#da.pt.size = "abundance"
+da.pt.lim = c(0,1)
+da.pt.brks = c(0.0125, 0.025, 0.05, 0.1)
+da.pt.rng = c(1,5)
+
+### Switch R2 and Coef ----
+
+
+
+
+output[3:7] = lapply(output[3:7], function(obj.tmp){
+  obj.tmp$output$results[,2] = obj.tmp$output$results$R2
+  return(obj.tmp)
+})
+
+
+
+seed.val = 276
+set.seed(seed.val)
+
+
+
+# Fig 2A (Beta Diversity) ----
+
+## Set Up ----
+
+#grab results
+obj.w = output$Stage_age_BetaDiversity_Species
+
+#ordination set up
+dist.list = obj.w$input$Measures #get similarities metrics for ordination
+dist.name.vec = c("Bray Curtis", "Unifrac", "Weighted Unifrac")
+
+## Initial Ordination (Long) ----
+ord.list = lapply(1:length(dist.list), function(i){
+  #set seed
+  set.seed(seed.val)
+  #grab distance, distance names, and phyloseq input
+  dist.tmp = dist.list[[i]]
+  dist.nm = dist.name.vec[i]
+  phylo.tmp = obj.w$input$Phyloseq
+  #change sample data for better graphing
+  md.tmp = sample_data(phylo.tmp) %>% data.frame()
+  md.tmp = md.tmp %>% mutate(prim_or_met = prim_or_met_factor)
+  sample_data(phylo.tmp) = sample_data(md.tmp)
+  
+  #get title
+  title.tmp = dist.nm %>% str_to_title()
+  title.tmp = paste0("\u273B", " ", title.tmp)
+  #ordinate
+  ord.tmp = ordinate(physeq = phylo.tmp, method = "PCoA", distance = paste0(dist.tmp))
+  ord.plt.tmp = plot_ordination(physeq=phylo.tmp, 
+                                ordination = ord.tmp, 
+                                type="samples", 
+                                color = "prim_or_met") +
+    labs(title=title.tmp) +
+    theme_classic() +
+    theme(legend.position = "none")
+  return(ord.plt.tmp)
+})
+names(ord.list) = names(dist.list)
+
+
+
+## Format Ordinations ----
+ord.format = ord.list
+ord.format = lapply(ord.format, function(plt.tmp){
+  #fix point size
+  plt.tmp$layers[[1]]$geom$default_aes$size = a.pt.sz
+  plt.tmp$layers[[1]]$geom$default_aes$stroke = 0
+  
+  #fix axis titles
+  axistitle.new = plt.tmp$plot_env$strivar %>%
+    gsub(pattern = "\\[", replacement = "(") %>%
+    gsub(pattern = "\\]", replacement = ")") %>%
+    gsub(pattern = "   ", replacement = " ")
+  xlab.new = axistitle.new[1]
+  ylab.new = axistitle.new[2]
+  
+  #remaining formatting
+  plt.tmp = plt.tmp +
+    scale_color_manual(values = a.pal) +
+    xlab(xlab.new) + ylab(ylab.new) +
+    theme(axis.title = element_text(size = a.axis.title.sz),
+          axis.text = element_text(size = a.axis.text.sz),
+          axis.text.x = element_text(margin = margin(t = 0.25, unit = "mm")),
+          axis.text.y = element_text(margin = margin(r=0, unit = "mm")),
+          legend.text = element_text(size = a.legend.text.sz),legend.title = element_text(size = a.legend.title.sz), #added
+          plot.title = element_text(hjust = a.plt.title.hjust, 
+                                    vjust = a.plt.title.vjust, 
+                                    size = a.plt.title.sz, 
+                                    margin = margin(t=0, b = 2, unit = "mm")),
+          aspect.ratio = 1, 
+          axis.line = element_line(linewidth = unit(0.25, units = "mm")),
+          axis.ticks = element_line(linewidth = unit(0.25, units = "mm")),
+          axis.ticks.length = unit(0.5, units = "mm"),
+          axis.title.y = element_text(vjust = -1.5),
+          axis.title.x = element_text(vjust = 3),
+          plot.margin = margin(l = 0, b = 0, r = 0, t = 0, unit = "mm"))
+  return(plt.tmp)
+})
+
+## Add Panel Letter ----
+
+ord.format[[1]] = ord.format[[1]] +
+  labs(tag = "A") +
+  theme(plot.margin = margin(l = 9, b = 0, r = 0, t = 0, unit = "mm"),
+        plot.tag = element_text(size = 10, hjust = 1, vjust = 1),
+        plot.tag.location = "plot",
+        plot.tag.position = c(-0.2,0.95))
+
+
+
+
+
+
+# Fig 2B (Genus) ----
+
+## Main ----
+
+### Set Up ----
+
+#grab results
+obj.w = output$Stage_age_Taxonomic_Genus
+
+#prep table
+prep = da_plt_prep(obj = obj.w, type = "auto", cuts = c(0.05, 0.1),
+                   label.crit = c("x < 0.1"), ntop = 10)
+#grab mean abundances and add to prep table
+#abund_w = get_abund(feature.dat = obj.w$output$test.object$feature.dat, type = "count")
+abund_w = norm.fxn(object = obj.w) %>% colMeans()
+#abund_w = data.frame(nm = names(abund_w), abundance = abund_w)
+abund_w = data.frame(nm = gsub(pattern = "\\.", replacement = "-", x = names(abund_w)), abundance = abund_w)
+prep$df = left_join(prep$df, abund_w, by = c("Feature_W" = "nm"))
+
+
+#prep palette
+levels(prep$df$signif_level)
+prep$df$signif_level %>% unique()
+pal.w = da.pal.master[prep$df$signif_level %>% unique()]
+
+### Plotting ----
+plt.w = da_plt(obj.prep = prep, type = "auto",
+               pt.color = pal.w,
+               pt.size = da.pt.size,
+               legend.tf = da.legend.tf,
+               xlab.size = da.xlab.sz,
+               ylab.size = da.ylab.sz, text.size=plt.axis.sz,
+               tick.size = da.tick.sz,
+               label.size.param = da.label.size.param,
+               box.pad.size = da.box.pad.size, 
+               point.pad.size = da.point.pad.size,
+               max.overlaps.param = da.max.overlaps.param,
+               max.iter.param = da.max.iter.param,
+               max.time.param = da.max.time.param,
+               force.param = da.force.param,
+               force.pull.param = da.force.pull.param,
+               skiplabel = F, 
+               pt.lim = da.pt.lim, 
+               pt.rng = da.pt.rng, 
+               pt.brks = da.pt.brks)
+fig.2b = plt.w 
+
+# Fig 2C (Species) ----
+
+## Set Up ----
+
+#grab results
+obj.w = output$Stage_age_Taxonomic_Species
+
+#prep table
+prep = da_plt_prep(obj = obj.w, type = "auto", cuts = c(0.05, 0.1),
+                   label.crit = c("x < 0.1"), ntop = 10)
+#grab mean abundances and add to prep table
+#abund_w = get_abund(feature.dat = obj.w$output$test.object$feature.dat, type = "count")
+abund_w = norm.fxn(object = obj.w) %>% colMeans()
+#abund_w = data.frame(nm = names(abund_w), abundance = abund_w)
+abund_w = data.frame(nm = gsub(pattern = "\\.", replacement = "-", x = names(abund_w)), abundance = abund_w)
+prep$df = left_join(prep$df, abund_w, by = c("Feature_W" = "nm"))
+
+
+#prep palette
+levels(prep$df$signif_level)
+prep$df$signif_level %>% unique()
+pal.w = da.pal.master[prep$df$signif_level %>% unique()]
+
+## Plotting ----
+
+plt.w = da_plt(obj.prep = prep, type = "auto",
+               pt.color = pal.w,
+               pt.size = da.pt.size,
+               legend.tf = da.legend.tf,
+               xlab.size = da.xlab.sz,
+               ylab.size = da.ylab.sz, text.size=plt.axis.sz,
+               tick.size = da.tick.sz,
+               label.size.param = da.label.size.param,
+               box.pad.size = da.box.pad.size, 
+               point.pad.size = da.point.pad.size,
+               max.overlaps.param = da.max.overlaps.param,
+               max.iter.param = da.max.iter.param,
+               max.time.param = da.max.time.param,
+               force.param = da.force.param,
+               force.pull.param = da.force.pull.param,
+               skiplabel = F, 
+               pt.lim = da.pt.lim, 
+               pt.rng = da.pt.rng, 
+               pt.brks = da.pt.brks)
+fig.2c = plt.w 
+
+
+# fig.2c = fig.2c +
+#   theme(aspect.ratio = 1,
+#         axis.line = element_line(linewidth = unit(0.25, units = "mm")),
+#         axis.ticks = element_line(linewidth = unit(0.25, units = "mm")),
+#         axis.ticks.length = unit(0.5, units = "mm"),
+#         axis.title.y = element_text(vjust = -1.5),
+#         axis.title.x = element_text(vjust = 3),
+#         plot.margin = margin(l = 0, b = 0, r = 0, t = 0, unit = "mm"))
+# 
+# fig.2c + canvas(width = 56, height = 56, units = "mm", dpi = 300)
+
+# Fig 2D (Pathway) ----
+
+## Set Up ----
+
+#grab results
+obj.w = output$Stage_age_Functional_Pathway
+
+#prep table
+prep = da_plt_prep(obj = obj.w, type = "auto", cuts = c(0.05, 0.1),
+                   label.crit = c("x < 0.1"), ntop = 10)
+#grab mean abundances and add to prep table
+#abund_w = get_abund(feature.dat = obj.w$output$test.object$feature.dat, type = "count")
+abund_w = norm.fxn(object = obj.w) %>% colMeans()
+#abund_w = data.frame(nm = names(abund_w), abundance = abund_w)
+abund_w = data.frame(nm = gsub(pattern = "\\.", replacement = "-", x = names(abund_w)), abundance = abund_w)
+prep$df = left_join(prep$df, abund_w, by = c("Feature_W" = "nm"))
+
+
+#prep palette
+levels(prep$df$signif_level)
+prep$df$signif_level %>% unique()
+pal.w = da.pal.master[prep$df$signif_level %>% unique()]
+
+## Plotting ----
+
+plt.w = da_plt(obj.prep = prep, type = "auto",
+               pt.color = pal.w,
+               pt.size = da.pt.size,
+               legend.tf = da.legend.tf,
+               xlab.size = da.xlab.sz,
+               ylab.size = da.ylab.sz, text.size=plt.axis.sz,
+               tick.size = da.tick.sz,
+               label.size.param = da.label.size.param,
+               box.pad.size = da.box.pad.size, 
+               point.pad.size = da.point.pad.size,
+               max.overlaps.param = da.max.overlaps.param,
+               max.iter.param = da.max.iter.param,
+               max.time.param = da.max.time.param,
+               force.param = da.force.param,
+               force.pull.param = da.force.pull.param,
+               skiplabel = F, 
+               pt.lim = da.pt.lim, 
+               pt.rng = da.pt.rng, 
+               pt.brks = da.pt.brks)
+fig.2d = plt.w 
+
+# fig.2d = fig.2d +
+#   theme(aspect.ratio = 1, 
+#         axis.line = element_line(linewidth = unit(0.25, units = "mm")),
+#         axis.ticks = element_line(linewidth = unit(0.25, units = "mm")),
+#         axis.ticks.length = unit(0.5, units = "mm"),
+#         axis.title.y = element_text(vjust = -1.5),
+#         axis.title.x = element_text(vjust = 3),
+#         plot.margin = margin(l = 0, b = 0, r = 0, t = 0, unit = "mm"))
+# 
+# fig.2d + canvas(width = 56, height = 56, units = "mm", dpi = 300)
+
+# Fig 2E (EC) -----
+
+## Set Up ----
+
+#grab results
+obj.w = output$Stage_age_Functional_EC
+
+#prep table
+prep = da_plt_prep(obj = obj.w, type = "auto", cuts = c(0.05, 0.1),
+                   label.crit = c("x < 0.1"), ntop = 10)
+#grab mean abundances and add to prep table
+#abund_w = get_abund(feature.dat = obj.w$output$test.object$feature.dat, type = "count")
+abund_w = norm.fxn(object = obj.w) %>% colMeans()
+#abund_w = data.frame(nm = names(abund_w), abundance = abund_w)
+abund_w = data.frame(nm = gsub(pattern = "\\.", replacement = "-", x = names(abund_w)), abundance = abund_w)
+prep$df = left_join(prep$df, abund_w, by = c("Feature_W" = "nm"))
+
+
+#prep palette
+levels(prep$df$signif_level)
+prep$df$signif_level %>% unique()
+pal.w = da.pal.master[prep$df$signif_level %>% unique()]
+
+## Plotting ----
+plt.w = da_plt(obj.prep = prep, type = "auto",
+               pt.color = pal.w,
+               pt.size = da.pt.size,
+               legend.tf = da.legend.tf,
+               xlab.size = da.xlab.sz,
+               ylab.size = da.ylab.sz,
+               tick.size = da.tick.sz,
+               label.size.param = da.label.size.param,
+               box.pad.size = da.box.pad.size, 
+               point.pad.size = da.point.pad.size,
+               max.overlaps.param = da.max.overlaps.param,
+               max.iter.param = da.max.iter.param,
+               max.time.param = da.max.time.param,
+               force.param = da.force.param,
+               force.pull.param = da.force.pull.param,
+               skiplabel = F, 
+               pt.lim = da.pt.lim, 
+               pt.rng = da.pt.rng, 
+               pt.brks = da.pt.brks)
+fig.2e = plt.w 
+
+
+# Fig 2F ----
+
+## Set Up ----
+
+#grab results
+obj.w = output$Stage_age_Functional_KO
+
+#prep table
+prep = da_plt_prep(obj = obj.w, type = "auto", cuts = c(0.05, 0.1),
+                   label.crit = c("x < 0.1"), ntop = 10)
+#grab mean abundances and add to prep table
+#abund_w = get_abund(feature.dat = obj.w$output$test.object$feature.dat, type = "count")
+abund_w = norm.fxn(object = obj.w) %>% colMeans()
+#abund_w = data.frame(nm = names(abund_w), abundance = abund_w)
+abund_w = data.frame(nm = gsub(pattern = "\\.", replacement = "-", x = names(abund_w)), abundance = abund_w)
+prep$df = left_join(prep$df, abund_w, by = c("Feature_W" = "nm"))
+
+#prep palette
+levels(prep$df$signif_level)
+prep$df$signif_level %>% unique()
+pal.w = da.pal.master[prep$df$signif_level %>% unique()]
+
+## Plotting ----
+plt.w = da_plt(obj.prep = prep, type = "auto",
+               pt.color = pal.w,
+               pt.size = da.pt.size,
+               legend.tf = da.legend.tf,
+               xlab.size = da.xlab.sz,
+               ylab.size = da.ylab.sz,
+               tick.size = da.tick.sz,
+               label.size.param = da.label.size.param,
+               box.pad.size = da.box.pad.size, 
+               point.pad.size = da.point.pad.size,
+               max.overlaps.param = da.max.overlaps.param,
+               max.iter.param = da.max.iter.param,
+               max.time.param = da.max.time.param,
+               force.param = da.force.param,
+               force.pull.param = da.force.pull.param,
+               skiplabel = F, 
+               pt.lim = da.pt.lim, 
+               pt.rng = da.pt.rng, 
+               pt.brks = da.pt.brks)
+fig.2f = plt.w 
+
+
+
+# Modifying DA Plots ----
+
+## Main Plot Theme Adj ----
+plt.da.list = list(fig.2b, fig.2c, fig.2d, fig.2e, fig.2f)
+plt.da.list = lapply(plt.da.list, function(plt.tmp){
+  plt.tmp = plt.tmp +
+    theme(aspect.ratio = 1, 
+          axis.line = element_line(linewidth = unit(0.25, units = "mm")),
+          axis.ticks = element_line(linewidth = unit(0.25, units = "mm")),
+          axis.ticks.length = unit(0.5, units = "mm"),
+          axis.title.y = element_text(vjust = 1.5), #-1.5
+          axis.title.x = element_text(vjust = 1.25), # 3
+          plot.margin = margin(l = 0, b = 0, r = 0, t = 0, unit = "mm"))
+  op = plt.tmp
+  return(op)
+})
+
+#change "Coefficient to R2"
+plt.da.list = lapply(plt.da.list, function(plt.tmp){
+  plt.tmp = plt.tmp + xlab(label = bquote(R^2))
+  op = plt.tmp
+  return(op)
+})
+
+#check sizing
+#plt.da.list[[1]] + canvas(width = 56, height = 56, units = "mm", dpi = 300)
+# plt.da.list[[2]] + canvas(width = 56, height = 56, units = "mm", dpi = 300)
+#plt.da.list[[3]] + canvas(width = 56, height = 56, units = "mm", dpi = 300)
+plt.da.list[[4]] + canvas(width = 56, height = 56, units = "mm", dpi = 300)
+#plt.da.list[[5]] + canvas(width = 56, height = 56, units = "mm", dpi = 300)
+
+## Add Panel Labels ----
+
+#grab letters for panels
+panel.labs = LETTERS[2:6]
+
+#grab plots we want to add letters to
+toaddlabs = plt.da.list
+
+#add letters and adjust margins where needed
+withlabs = lapply(1:length(toaddlabs), function(i){
+  plt.tmp = toaddlabs[[i]]
+  lab.tmp = panel.labs[i]
+  plt.tmp = plt.tmp +
+    labs(tag = lab.tmp) +
+    theme(plot.margin = margin(l = 3, b = 0, r = 0, t = 0, unit = "mm"),
+          plot.tag = element_text(size = 10, hjust = 1, vjust = 1),
+          plot.tag.location = "plot", 
+          plot.tag.position = c(0,1))
+  return(plt.tmp)
+})
+
+
+# Legends ----
+
+## Beta Diversity Plot Legend ----
+
+### Set Up ----
+
+df.beta = data.frame(
+  x = rep(1, times = 2),
+  y = factor(c(1:2), levels = 1:2, ordered=T),
+  fill.col = factor(c("Primary", "Metastatic"), ordered = T, levels = c("Primary", "Metastatic", "p < 0.05")))
+
+df.asterisk = data.frame(
+  x = rep(1, times = 1),
+  y = factor(c(1), levels = 1, ordered=T),
+  fill.col = factor(c("p < 0.05"), ordered = T, levels = c("Primary", "Metastatic", "p < 0.05")))
+
+### Dummy Plot ----
+# dummy.legend.beta = ggplot(df.beta, aes(x = x, y = y, color = fill.col)) + 
+#   geom_point(size = 1) + scale_color_manual(values = c("#6551CCFF", "#BFB2FFFF")) + theme_bw()
+
+dummy.legend.beta = ggplot() + 
+  geom_point(data = df.beta, aes(x = x, y = y, color = fill.col), size = 1, shape = 19) +
+  geom_point(data = df.asterisk, aes(x = x, y = y, color = fill.col), size = 2, shape = "\u273B") +
+  #scale_color_manual(values = c("#6551CCFF", "#BFB2FFFF", "black")) +
+scale_color_manual(values = c("#98ab76", "#c62320", "black")) +
+  theme_bw()
+
+### Format ----
+dummy.format.legend.beta = dummy.legend.beta + 
+  theme(legend.title = element_blank(),
+        legend.text = element_text(size = 10, margin = margin(t = 0, r = 0, b = 0, l = 0, unit = "mm")),  # size= 6
+        legend.margin = margin(t = 0, r = 0, b = 0, l = 0, unit = "mm"),
+        legend.box.spacing = unit(0, "mm"),
+        legend.box.margin = margin(t = 0, r = 0, b = 0, l = 0, unit = "mm"),
+        legend.key.height = unit(3, "mm"),
+        legend.key.width = unit(4, "mm")) 
+dummy.format.legend.beta
+
+### Extract Legend ----
+
+#grab legend
+legend.beta = dummy.format.legend.beta %>% 
+  get_legend()
+legend.beta = legend.beta %>% 
+  as_ggplot()
+
+#final touches 
+legend.beta = legend.beta +
+  theme(plot.margin = margin(t = 0, r = -1, b = 0, l = -5, unit = "mm"))
+
+#check size
+#legend.beta + canvas(height = 10, width = 20, units = "mm", dpi = 300)
+
+## DA Plot Legend ----
+
+### Set Up ----
+
+df.prim = data.frame(
+  x = rep(1, times = 3),
+  y = factor(c(1:3), levels = 1:3, ordered=T),
+  fill.col = factor(c("q < 0.05", "q < 0.1","q \u2265 0.1"), ordered = T, levels = c("q < 0.05", "q < 0.1","q \u2265 0.1")))
+df.dummy = data.frame(x = 1, y = 1)
+df.bp = data.frame(x = rnorm(n = 100, mean = 0, sd = 1),
+                   group = factor(c(rep(2, times = 50), rep(3, times = 50)), levels = c(2:3)),
+                   fill.col = factor(c(rep("Primary", times = 50), rep("Metastatic", times = 50)), levels = c("Primary", "Metastatic")))
+
+### Dummy Plot ----
+dummy.legend.da = ggplot() + 
+  geom_point(data = df.prim, aes(x=x, y = y, color = fill.col), size = 1) +
+  geom_point(data = df.dummy, aes(x=x, y = y, size = "met1"), color = "gray75") +
+  geom_point(data = df.dummy, aes(x=x, y = y, size = "met2"), color = "#eea8ba") +
+  geom_point(data = df.dummy, aes(x=x, y = y, size = "met3"), color = "#d83e65") +
+  theme_bw() +
+  scale_color_manual("> Primary Prevalence", 
+                     values = c("#98ab76","#ced1af", "gray75"),  # c("#45812f", "#8AB833", "gray75")
+                     guide=guide_legend(order=1)) +
+  scale_size_manual(
+    "> Metastatic Prevalence", 
+    values=rep(1,3),
+    #guide=guide_legend(order = 2, override.aes = list(colour=c("#d83e65", "#eea8ba", "gray75"))),
+    guide=guide_legend(order = 2, override.aes = list(colour=c("#c62320", "#f05b43", "gray75"))),  # red metastatic
+    labels=c("q < 0.05", "q < 0.1","q \u2265 0.1"))
+
+dummy.legend.da  # display
+
+
+### Format ----
+
+dummy.format.legend.da = dummy.legend.da + 
+  theme(legend.title = element_text(size = 10, face = "bold", margin = margin(t = 0, r = 0, b = 0, l = 0, unit = "mm")),
+        legend.text = element_text(size = 8, margin = margin(t = 0, r = 0, b = 0, l = 0, unit = "mm")),
+        legend.margin = margin(t = 0, r = 0, b = 0, l = 0, unit = "mm"),
+        legend.box.spacing = unit(0, "mm"),
+        legend.box.margin = margin(t = 0, r = 0, b = 0, l = 0, unit = "mm"),
+        legend.key.height = unit(3, "mm"),
+        legend.key.width = unit(4, "mm"))
+dummy.format.legend.da
+
+### Extract Legend ----
+
+#grab legend
+legend.da = dummy.format.legend.da %>% 
+  get_legend()
+legend.da = legend.da %>% 
+  as_ggplot()
+
+#final touches 
+legend.da = legend.da +
+  theme(plot.margin = margin(t = 0, r = -1, b = 0, l = -5, unit = "mm"))
+
+#check size
+#legend.da + canvas(height = 40, width = 20, units = "mm", dpi = 300)
+
+# Print to PNG ----
+
+## External 2A Legend (2col) ----
+
+### Layout Matrix ----
+
+#nrow (height) should be 206, ncol (width) should be 138
+layout.mat = matrix(data = NA, nrow = 206, ncol = 138)
+layout.mat[1:38,1:46] = 1 #beta 1
+layout.mat[1:38,47:82] = 2 #beta 2
+layout.mat[1:38,83:118] = 3 #beta 3
+layout.mat[1:14,119:138] = 4 #upper beta legend spacer
+layout.mat[15:24,119:138] = 5 #beta legend
+layout.mat[25:38,119:138] = 6 #lower beta legend spacer
+layout.mat[39:94,1:59] = 7 #b
+layout.mat[39:94,60:118] = 8 #c
+layout.mat[95:150,1:59] = 9 #d
+layout.mat[95:150,60:118] = 10 #e
+layout.mat[151:206,1:29] = 11 #spacer
+layout.mat[151:206,30:88] = 12 #f
+layout.mat[151:206,89:118] = 13 #spacer
+layout.mat[39:73,119:138] = 14 #dalegend upper spacer
+#layout.mat[74:113,119:138] = 15 #dalegend
+layout.mat[147:193,110:129] = 15
+layout.mat[114:206,119:138] = 16 #dalegend lower spacer
+#(everything is set at 36w x 38, with first panel set to 40w x 38)
+#desired with of 46w x 38 
+
+#check layout
+gs <- lapply(1:16, function(ii) 
+  grobTree(rectGrob(gp=gpar(fill=ii, alpha=0.5)), textGrob(ii)))
+grid.arrange(grobs = gs, layout_matrix = layout.mat)
+
+
+### Plot List ----
+
+#spacer set up
+plt.spacer = ggplot() + theme_void()
+
+#list plots including spacers and conver to grobs
+list.grob = list(ord.format[[1]], 
+                 ord.format[[2]],
+                 ord.format[[3]], 
+                 plt.spacer, 
+                 legend.beta,
+                 plt.spacer,
+                 withlabs[[1]], 
+                 withlabs[[2]],
+                 withlabs[[3]], 
+                 withlabs[[4]], 
+                 plt.spacer,
+                 withlabs[[5]],
+                 plt.spacer,
+                 plt.spacer,
+                 legend.da,
+                 plt.spacer)
+list.grob = lapply(list.grob, ggplotGrob)
+
+### Print ----
+png("../figures/Figure2.png", 
+    width = 138, 
+    height = 206, 
+    res = 300, 
+    units = "mm")
+grid.arrange(grobs = list.grob, layout_matrix = layout.mat)
+dev.off()
+

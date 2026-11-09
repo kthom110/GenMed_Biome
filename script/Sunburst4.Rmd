@@ -1,0 +1,35 @@
+---
+title: ""
+output: html_document
+date: " "
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+  library(MetBrewer)
+  library(plotly)
+
+```
+
+
+
+
+```{r pressure, echo=FALSE}
+
+  
+  data<-data.frame(read.delim('~/OncobiomeNumbers2.tsv', header=T, sep='\t'))
+
+
+
+  #pal=met.brewer('Hiroshige',nrow(data))[1:nrow(data)]
+  pal=met.brewer('Monet',nrow(data))[1:nrow(data)]
+  names(pal)=data$id
+
+  fig=plot_ly(data, ids = ~id, labels = ~labels, parents = ~parent, type = 'sunburst', hovertext=~values, branchvalues='total', marker = list(colors = pal) )
+
+  fig
+  
+  
+```
+

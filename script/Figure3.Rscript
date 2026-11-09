@@ -1,0 +1,950 @@
+# Set Up ----
+
+## Libraries ----
+
+library(tidyr)
+library(dplyr)
+library(tibble)
+library(stringr)
+library(phyloseq)
+library(ggplot2)
+library(ggpp)
+library(ggtext)
+library(glue)
+library(ComplexHeatmap)
+library(circlize)
+library(grid)
+library(gridExtra)
+library(ggfx)
+library(ggpubr)
+library(ggview)
+library(png)
+
+library(MetBrewer)
+library(cowplot)
+
+
+## Load Data ----
+#results
+load("../data/resultsNAC.RData")
+
+
+#for fig 3b (chemo schema)
+load("../data/chemo_schema.RData")
+load("../data/clinical_data.RData")
+
+#biorender fig3a
+png.fig3a = readPNG("../data/fig3a.png")
+
+
+## Define Functions ----
+
+#load da plotting
+source("DA_plot_wrapper.R")
+
+
+#define functions for doing the insets
+get_lims = function(plt, abs.dim = F){
+  y.vec = layer_scales(plt)$y$get_limits()
+  x.vec = layer_scales(plt)$x$get_limits()
+  if(abs.dim == T){
+    y.vec = abs(y.vec[1] - y.vec[2])
+    x.vec = abs(x.vec[1] - x.vec[2])
+  }
+  op = list("x" = x.vec, "y" = y.vec)
+  return(op)
+}
+
+get_window = function(x, y, bl.x, bl.y, plt){
+  input.x = get_lims(plt, abs.dim = T)$x
+  input.y = get_lims(plt, abs.dim = T)$y
+  
+  origin.x = get_lims(plt, abs.dim = F)$x[1]
+  origin.y = get_lims(plt, abs.dim = F)$y[1]
+  
+  op = list("xmin" =  (bl.x*input.x) + origin.x,
+            "xmax" = (input.x*(bl.x + x)) + origin.x,
+            "ymin" = (bl.y*input.y) + origin.y,
+            "ymax" = (input.y*(bl.y + y)) + origin.y)
+  
+  return(op)
+}
+
+norm.fxn = function(object){
+  obj.tmp = object
+  type.tmp = obj.tmp$input$FeatureType
+  if(type.tmp == "Taxonomic"){
+    print("doing Taxonomic...")
+    #get unpruned feature df
+    df.tmp = obj.tmp$input$Phyloseq %>% otu_table() %>% data.frame() %>% t()
+    rownames(df.tmp) = gsub(pattern = "\\.", replacement = "-", x = rownames(df.tmp))
+    
+    #grab depth before anything else
+    depth.tmp = colSums(df.tmp)
+    #winsorize (counts)
+    df.tmp = apply(df.tmp, MARGIN = 1, function(x){
+      qt = quantile(x, 1-0.03)
+      x[x >= qt] <- qt
+      return(x)
+    }) %>% t()
+    
+    #TSS (based on unpruned feature matrix)
+    df.tmp = t(df.tmp)/depth.tmp
+    df.tmp = df.tmp %>% data.frame()
+    
+  } else if (type.tmp =="Functional"){
+    print("doing Functional...")
+    df.tmp = obj.tmp$output$test.object$feature.dat
+    
+    #TSS (based on pruned feature matrix)
+    df.tmp = t(df.tmp)/colSums(df.tmp)
+    df.tmp = df.tmp %>% data.frame()
+    
+    #winsorize
+    df.tmp = apply(t(df.tmp), MARGIN = 1, function(x){
+      qt = quantile(x, 1-0.03)
+      x[x >= qt] <- qt
+      return(x)
+    }) %>% data.frame()
+  }
+  #square root
+  df.tmp = df.tmp^0.5
+  
+  #select features of interest
+  #df.tmp = df.tmp %>% rownames_to_column(var = "SAMPLEID") %>% select(all_of(c("SAMPLEID", features)))
+  op = df.tmp
+  return(op)
+  
+}
+
+get_abund = function(feature.dat, type = "count"){
+  if(type == "proportion"){
+    abund = feature.dat
+  }
+  if(type ==  "count"){
+    abund = t(t(feature.dat)/colSums(feature.dat))
+  }
+  meanabund  = apply(abund, 1, function(x) mean(x))
+  return(meanabund)
+}
+
+## Parameter Set Up ----
+### Fig 3A Params ----
+param.3a.tag.xpos = 0.8/130
+param.3a.tag.ypos = 26/28
+
+### Fig 3B Params ----
+param.3b.tag.xpos = 0.8/130
+param.3b.tag.ypos = 46/48
+param.3b.main.height = unit(2.55, "mm")*nrow(chemo.df %>% t())
+param.3b.main.width = unit(2.55, "mm")*ncol(chemo.df %>% t())
+param.3b.rowname.size = 5
+param.3b.anno.size = unit(2.55, "mm")
+param.3b.anno.name.size = 5
+param.3b.anno.name.face = "bold"
+param.3b.legend.title.size = 5
+param.3b.legend.title.face = "bold"
+param.3b.title.gap = unit(1, "mm")
+param.3b.legend.lab.size = 5
+param.3b.legend.grid.height = unit(2.55, "mm")
+param.3b.legend.grid.width = unit(2.55, "mm")
+
+### Fig 3C Params ----
+legend.alpha.rmargin = -28
+param.3c.boxplot.fill = c("#FCE4F9","#E8C7F9", "#BEB1FF", "#6551CC")
+param.3c.boxplot.lwd = unit(0.25, "mm")
+param.3c.axis.title.size = 9 #6
+param.3c.axis.text.size = 7 #5
+param.3c.aspect.ratio = 1
+param.3c.axis.lwd = unit(0.25, units = "mm")
+param.3c.axis.ticks.lwd = unit(0.25, units = "mm")
+param.3c.axis.ticks.length = unit(0.5, units = "mm")
+
+### DA Params (3d-3f) ----
+
+#pal.master = c("#45812f","#8AB833","#d83e65","#E57E7E","gray75")
+#da.pal.master = c("#d83e65","#eea8ba", "#45812f","#8AB833","gray75")
+da.pal.master =c("#c62320", "#f05b43", "#ced1af", "#98ab76","gray75")
+
+#  these make little sense
+names(da.pal.master) = c("Positive & padj < 0.05", "Positive & padj ≥ 0.05 & padj < 0.15",
+                         "Negative & padj < 0.05", "Negative & padj ≥ 0.05 & padj < 0.15",
+                         "ns")
+
+da.pt.size = 1.6  #1.2
+da.legend.tf = F
+da.xlab.sz = 10 #5
+da.ylab.sz = 10 #5
+plt.axis.sz=9 # added
+da.tick.sz = 5
+da.label.size.param = 1.65
+da.max.overlaps.param = Inf
+da.max.iter.param = 10000
+da.max.time.param = 0.5
+da.force.param = 1
+da.force.pull.param = 1
+#da.ylab.vjust = 0
+da.box.pad.size = 0.5
+da.point.pad.size = unit(0.25, units = "mm")
+
+
+
+seed.val = 376
+set.seed(seed.val)
+
+# Fig 3A (Delineation) ----
+## Plot ----
+fig.3a = ggplot() + theme_void() +
+  annotation_raster(png.fig3a, xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = Inf) 
+## Add Panel Label ----
+fig.3a = fig.3a + labs(tag = "A") +
+  theme(plot.margin = margin(l = 0, b = 0, r = 0.3, t = 0, unit = "mm"),
+        plot.tag = element_text(size = 10, hjust = 0, vjust = 1),
+        plot.tag.location = "plot",
+        plot.tag.position = c(param.3a.tag.xpos,param.3a.tag.ypos))
+
+fig.3a + canvas(width = 130, height = 28, units = "mm", dpi = 300)
+
+
+
+# Fig 3B (Chemo Schema) ----
+
+
+
+## Set Up ----
+
+### Binary Matrix ----
+mat = chemo.df %>% t() %>% data.frame()
+
+### Annotations ----
+
+#put clinical data together quickly
+key = clinical_data %>%
+  select(ANALYSISID, MCCMID, rcb_score_factor, surrogate_subtype) %>%
+  mutate(OLDID = paste0("ONCO", MCCMID)) %>%
+  filter(OLDID %in% rownames(chemo.df))
+rownames(key) = key$OLDID
+key = key[colnames(mat),]
+rownames(key) = key$ANALYSISID
+
+#change to Analysis ID
+colnames(mat) = key$ANALYSISID
+
+#change column labels
+key = key %>% mutate("Subtype" = surrogate_subtype, "RCB" = rcb_score_factor)
+
+#shorten nitrogen mustard
+drugkey[which(drugkey$Class == "Nitrogen Mustard Analogue"),"Class"] = "Nitrogen Mustard"
+
+#convert class to factor
+lvl.class = unique(drugkey$Class)
+drugkey = drugkey %>% mutate(Class = factor(Class, levels = lvl.class))
+
+#replace with +/- for subtypes and convert to factor
+key = key %>% 
+  mutate(Subtype = as.character(Subtype)) %>%
+  mutate(Subtype = case_when(Subtype == "ERpos_HER2neg" ~ "ER+/HER2-",
+                             Subtype == "ERpos_HER2pos" ~ "ER+/HER2+",
+                             Subtype == "ERneg_HER2pos" ~ "ER-/HER2+",
+                             Subtype == "ERneg_HER2neg" ~ "ER-/HER2-"))
+key = key %>% mutate(Subtype = factor(Subtype, levels = c("ER+/HER2-", "ER+/HER2+", "ER-/HER2+", "ER-/HER2-")))
+
+### Colors ----
+
+#main colors
+main_col_fun = colorRamp2(c(0,1), c("gray90","gray25"))
+
+#annotation colors
+subtype.col = c("#8AB833FF", "#C0CF3AFF", "#029676FF", "#4AB5C4FF")
+names(subtype.col) = levels(key$Subtype)
+rcb.col = ordinal_palette <- c("#FCE4F9","#E8C7F9", "#BEB1FF", "#6551CC")
+
+names(rcb.col) = levels(key$rcb_score_factor)
+class.col = c("#DF2E28FF", "#FE801AFF", "#E9BF35FF", "#81BB42FF", "#32C7A9FF", "#4A9BDCFF", "gray50")
+names(class.col) = levels(drugkey$Class)
+
+## Legends ----
+leg.rcb = Legend(labels = names(rcb.col),
+                 title = "RCB Score",
+                 legend_gp = gpar(fill = rcb.col),
+                 ncol = 1,
+                 labels_gp = gpar(fontsize = param.3b.legend.lab.size),
+                 grid_height = param.3b.legend.grid.height, 
+                 grid_width = param.3b.legend.grid.width,
+                 title_gp = gpar(fontsize = param.3b.legend.title.size, fontface = param.3b.legend.title.face),
+                 title_gap = param.3b.title.gap)
+leg.subtype = Legend(labels = names(subtype.col), 
+                     title = "Subtype",
+                     legend_gp = gpar(fill = subtype.col),
+                     ncol = 1,
+                     labels_gp = gpar(fontsize = param.3b.legend.lab.size),
+                     grid_height = param.3b.legend.grid.height, 
+                     grid_width = param.3b.legend.grid.width,
+                     title_gp = gpar(fontsize = param.3b.legend.title.size, fontface = param.3b.legend.title.face),
+                     title_gap = param.3b.title.gap)
+leg.class = Legend(labels = names(class.col), 
+                   title = "Class",
+                   legend_gp = gpar(fill = class.col),
+                   ncol = 2,
+                   labels_gp = gpar(fontsize = param.3b.legend.lab.size),
+                   grid_height = param.3b.legend.grid.height, 
+                   grid_width = param.3b.legend.grid.width,
+                   title_gp = gpar(fontsize = param.3b.legend.title.size, fontface = param.3b.legend.title.face),
+                   title_gap = param.3b.title.gap)
+
+leg.list = list(leg.class, leg.rcb, leg.subtype)
+
+
+
+## Annotations (plot prep) ----
+
+### Top ----
+anno.t = HeatmapAnnotation('RCB Score' = key$RCB,
+                           Subtype = key$Subtype,
+                           which = "column",
+                           col = list(Subtype = subtype.col,
+                                      'RCB Score' = rcb.col),
+                           simple_anno_size = param.3b.anno.size,
+                           annotation_name_gp= gpar(fontsize = param.3b.anno.name.size, fontface = param.3b.anno.name.face),
+                           gp = gpar(col = "white"),
+                           show_legend = F)
+
+### Left ----
+anno.l = HeatmapAnnotation(Class = drugkey$Class,
+                           which = "row",
+                           col = list(Class = class.col),
+                           simple_anno_size = param.3b.anno.size,
+                           annotation_name_gp= gpar(fontsize = param.3b.anno.name.size, fontface = param.3b.anno.name.face),
+                           gp = gpar(col = "white"),
+                           show_legend = F)
+
+## Base Plot ----
+plt.base = Heatmap(matrix = mat %>% as.matrix(), 
+                   cluster_rows = F,
+                   cluster_columns = F,
+                   top_annotation = anno.t,
+                   left_annotation = anno.l,
+                   col = main_col_fun,
+                   rect_gp = gpar(col = "white"),
+                   width = param.3b.main.width,
+                   height = param.3b.main.height,
+                   row_names_gp = gpar(fontsize = param.3b.rowname.size),
+                   show_column_names = F,
+                   show_heatmap_legend = F
+)
+
+## Assembly ----
+plt.assembled = draw(plt.base,
+                     annotation_legend_list = leg.list,
+                     annotation_legend_side = "bottom") %>% grid.grabExpr(width = 130/25.4, height = 48/25.4)
+
+
+## Add Panel Label ----
+fig.3b = ggplot() + theme_void() +
+  annotation_custom(grob = plt.assembled,xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = Inf)
+fig.3b = fig.3b + labs(tag = "B") +
+  theme(plot.margin = margin(l = 0, b = 0, r = 0.3, t = 0, unit = "mm"),
+        plot.tag = element_text(size = 10, hjust = 0, vjust = 1),
+        plot.tag.location = "plot",
+        plot.tag.position = c(param.3b.tag.xpos,param.3b.tag.ypos))
+
+fig.3b + canvas(width = 130, height = 48, units = "mm", dpi = 300)
+
+
+
+# Fig 3C (Alpha Diversity) -----
+
+
+
+## Set Up ----
+
+
+#grab results
+obj.w = output$NAC_Response_age_subtypeadj_AlphaDiversity_Species
+#set up different metrics
+alpha.list = c("Observed", "Shannon")
+
+df.w = obj.w$output$data %>% mutate(rcb_score = factor(rcb_score, levels = c(0, 1, 2, 3))) %>% mutate(RCB = rcb_score)
+
+## Plotting ----
+alpha.plt.list = lapply(alpha.list, function(var.tmp){
+  if(var.tmp == "Observed"){
+    newlab = "Observed Species"
+  }
+  if(var.tmp == "Shannon"){
+    newlab = "Shannon Index"
+  }
+  plt.tmp = ggplot(data = df.w, aes(x=RCB, fill = rcb_score, y = .data[[var.tmp]])) + 
+    geom_boxplot(lwd = param.3c.boxplot.lwd) +
+    ylab(label = newlab) +
+    scale_fill_manual(values = param.3c.boxplot.fill) +
+    theme_classic() +
+    theme(legend.position = "none", 
+          axis.title.x = element_text(size = param.3c.axis.title.size, margin = margin(l = 0, b = 0, r = 0, t = 0, unit = "mm")), 
+          axis.title.y = element_text(size = param.3c.axis.title.size, margin = margin(l = 0, b = 0, r = 0, t = 0, unit = "mm")),
+          aspect.ratio = 1, 
+          axis.line = element_line(linewidth = param.3c.axis.lwd),
+          axis.ticks = element_line(linewidth = param.3c.axis.ticks.lwd),
+          axis.ticks.length = param.3c.axis.ticks.length,
+          axis.text.x = element_text(size = param.3c.axis.text.size, margin = margin(t = 0.1, unit = "mm")),
+          axis.text.y = element_text(size = param.3c.axis.text.size, margin = margin(r=0, unit = "mm"), hjust = 1),
+          plot.margin = margin(l = 5, b = 5, r = 0, t = 0, unit = "mm"))
+  
+  #add asterisk
+  ast = grobTree(textGrob("\u273B", x=0.2,  y=0.2, hjust=0,
+                          gp=gpar(col="black", fontsize=10)))
+  plt.tmp = plt.tmp + annotation_custom(ast)
+  return(plt.tmp)
+})
+
+
+
+## Fix y-axis text spacing ----
+statement.glue = "<span style='color:white'>{whitetext}</span><span style='color:black'>{blacktext}</span>"
+
+
+#plot 1 setup
+labs.p1 = tibble(
+  "breaks.vec" = seq(900, 1800, 200),
+  "blacktext" = as.character(signif(breaks.vec, digits = 2)),
+  "whitetext" = "\\."
+)
+labs.p1[labs.p1$breaks.vec == 900,"whitetext"] = "\\."
+labs.p1 = labs.p1 %>% mutate(
+  name = glue(statement.glue)
+)
+
+#plot 2 setup
+labs.p2 = tibble(
+  "breaks.vec" = seq(2.5, 5, 0.5),
+  "blacktext" = format(signif(breaks.vec, digits = 2), nsmall = 1),
+  "whitetext" = "00"
+)
+labs.p2 = labs.p2 %>% mutate(
+  name = glue(statement.glue)
+)
+
+#plot
+alpha.plt.list[[1]] = alpha.plt.list[[1]] + 
+  scale_y_continuous(breaks = labs.p1$breaks.vec, labels = labs.p1$name) +
+  theme(axis.text.y = element_markdown(debug=F))
+alpha.plt.list[[2]] = alpha.plt.list[[2]] + 
+  scale_y_continuous(breaks = labs.p2$breaks.vec, labels = labs.p2$name) +
+  theme(axis.text.y = element_markdown(debug = F))
+## Add Panel Letter ----
+
+alpha.plt.list[[1]] = alpha.plt.list[[1]] +
+  labs(tag = "C") +
+  theme(plot.margin = margin(l = 3, b = 0, r = 0.5, t = 0, unit = "mm"),
+        plot.tag = element_text(size = 10, hjust = 1, vjust = 1),
+        plot.tag.location = "plot",
+        plot.tag.position = c(-0.025,1))
+alpha.plt.list[[2]] = alpha.plt.list[[2]] +
+  labs(tag = "C") +
+  theme(plot.margin = margin(l = 3, b = 0, r = 0.5, t = 0, unit = "mm"),
+        plot.tag = element_text(size = 10, hjust = 1, vjust = 1, color = "white"),
+        plot.tag.location = "plot",
+        plot.tag.position = c(-0,1))
+
+
+
+
+# Fig 3D (Genus) -----
+
+## Set Up ----
+
+#grab results
+obj.w = output$NAC_Response_age_subtypeadj_Taxonomic_Genus
+
+#prep table
+prep = da_plt_prep(obj = obj.w, type = "auto", cuts = c(0.05, 0.15),
+                   label.crit = c("x < 0.15"), ntop = 10)
+#grab mean abundances and add to prep table
+#abund_w = get_abund(feature.dat = obj.w$output$test.object$feature.dat, type = "count")
+abund_w = norm.fxn(object = obj.w) %>% colMeans()
+
+#abund_w = data.frame(nm = names(abund_w), abundance = abund_w)
+abund_w = data.frame(nm = gsub(pattern = "\\.", replacement = "-", x = names(abund_w)), abundance = abund_w)
+prep$df = left_join(prep$df, abund_w, by = c("Feature_W" = "nm"))
+
+#prep palette
+levels(prep$df$signif_level)
+prep$df$signif_level %>% unique()
+
+pal.w = da.pal.master[prep$df$signif_level %>% unique()]
+
+## Plotting ----
+
+set.seed(123)
+plt.w = da_plt(obj.prep = prep, type = "auto",
+               pt.color = pal.w,
+               pt.size = da.pt.size,
+               legend.tf = da.legend.tf,
+               xlab.size = da.xlab.sz,
+               ylab.size = da.ylab.sz, text.size=plt.axis.sz,
+               tick.size = da.tick.sz,
+               label.size.param = da.label.size.param,
+               box.pad.size = da.box.pad.size, 
+               point.pad.size = da.point.pad.size,
+               max.overlaps.param = da.max.overlaps.param,
+               max.iter.param = da.max.iter.param,
+               max.time.param = da.max.time.param,
+               force.param = da.force.param,
+               force.pull.param = da.force.pull.param)+lims(x=c(-.06,.1) )
+fig.3d = plt.w 
+
+
+
+### Set Up & Normalization ----
+
+# genera level input & output data
+obj.w = output$NAC_Response_age_subtypeadj_Taxonomic_Genus
+
+#get ZicoSeq normalized data
+df.w = obj.w$output$test.object$feature.dat
+md.w = obj.w$output$test.object$meta.dat
+
+#TSS (based on pruned feature matrix)
+df.w = t(df.w)/colSums(df.w)
+df.w = df.w %>% data.frame()
+
+#winsorize
+df.w = apply(t(df.w), MARGIN = 1, function(x){
+  qt = quantile(x, 1-0.03)
+  x[x >= qt] <- qt
+  return(x)
+}) %>% data.frame()
+
+#sqrt
+df.w = df.w^0.5
+
+#format  
+####  Lacticaseibacillus  ####
+df.w = left_join(md.w, df.w %>% rownames_to_column(var = "SAMPLEID") %>% select(all_of(c("SAMPLEID", 'g__Lactobacillus'))), by = "SAMPLEID")
+df.w = df.w %>% mutate('RCB Score' = factor(rcb_score_factor))
+
+### Plotting ----
+
+inst.4d= ggplot(data = df.w, aes(x=`RCB Score`, fill = `RCB Score`, y = g__Lactobacillus)) +
+   geom_boxplot(outlier.size = 0.15, linewidth = unit(0.25, units = "mm") )+theme_bw()+labs(y='Sqrt Abundance')+  
+   scale_fill_manual(values = c("#FCE4F9","#E8C7F9", "#BEB1FF", "#6551CC")) +
+   theme(axis.text.x=element_blank(),axis.title.x=element_blank(),legend.position='none',
+        axis.text.y=element_text(size=4),axis.title.y=element_text(size=5),axis.ticks.x = element_blank(),
+        panel.grid = element_line(size = 0.5) ) +
+    annotate("text", x = 2.25, y = .02, label = "Lactobacillus", color = "black", size = 1.6)
+    
+
+
+d=data.frame(x = c(0.63, 0.74, .965), y = c(0.9, 0.75, .75))
+
+
+fig.3d=
+ggdraw(fig.3d) +draw_plot(inst.4d, x = 0.55, y = 0.45, width = 0.45, height = 0.35)+
+   geom_polygon(d, mapping=aes(x,y), fill = "grey90", alpha = .25, color = "slategrey", size = 0.25) 
+ 
+
+# Fig 3F (Pathway) ----
+
+## Main ----
+
+### Set Up ----
+
+#grab results
+obj.w = output$NAC_Response_age_subtypeadj_Functional_Pathway
+
+#prep table
+prep = da_plt_prep(obj = obj.w, type = "auto", cuts = c(0.05, 0.15),
+                   label.crit = c("x < 0.15"), ntop = 10)
+#grab mean abundances and add to prep table
+#abund_w = get_abund(feature.dat = obj.w$output$test.object$feature.dat, type = "count")
+abund_w = norm.fxn(object = obj.w) %>% colMeans()
+#abund_w = data.frame(nm = names(abund_w), abundance = abund_w)
+abund_w = data.frame(nm = gsub(pattern = "\\.", replacement = "-", x = names(abund_w)), abundance = abund_w)
+prep$df = left_join(prep$df, abund_w, by = c("Feature_W" = "nm"))
+
+
+#prep palette
+levels(prep$df$signif_level)
+prep$df$signif_level %>% unique()
+pal.w = da.pal.master[prep$df$signif_level %>% unique()]
+
+### Plotting ----
+
+plt.w = da_plt(obj.prep = prep, type = "auto",
+               pt.color = pal.w,
+               pt.size = da.pt.size,
+               legend.tf = da.legend.tf,
+               xlab.size = da.xlab.sz,
+               ylab.size = da.ylab.sz, text.size=plt.axis.sz,
+               tick.size = da.tick.sz,
+               label.size.param = da.label.size.param,
+               box.pad.size = da.box.pad.size, 
+               point.pad.size = da.point.pad.size,
+               max.overlaps.param = da.max.overlaps.param,
+               max.iter.param = da.max.iter.param,
+               max.time.param = da.max.time.param,
+               force.param = da.force.param,
+               force.pull.param = da.force.pull.param,
+               skiplabel = T)
+fig.3f = plt.w 
+
+
+## Inset ----
+
+### Set Up & Normalization ----
+
+#get ZicoSeq normalized data
+obj.w = output$NAC_Response_age_subtypeadj_Functional_Pathway
+
+#feature of interest
+foi = "X354"   # feature names were not kept
+
+df.w = obj.w$output$test.object$feature.dat
+md.w = obj.w$output$test.object$meta.dat
+
+#TSS (based on pruned feature matrix)
+df.w = t(df.w)/colSums(df.w)
+df.w = df.w %>% data.frame()
+
+#winsorize
+df.w = apply(t(df.w), MARGIN = 1, function(x){
+  qt = quantile(x, 1-0.03)
+  x[x >= qt] <- qt
+  return(x)
+}) %>% data.frame()
+
+#sqrt
+df.w = df.w^0.5
+
+#format
+df.w = left_join(md.w, df.w %>% rownames_to_column(var = "SAMPLEID") %>% select(all_of(c("SAMPLEID", foi))), by = "SAMPLEID")
+df.w = df.w %>% mutate('RCB Score' = factor(rcb_score_factor))
+
+### Plotting ----
+
+plt.inset.fig3f= ggplot(data = df.w, aes(x=`RCB Score`, fill = `RCB Score`, y = .data[[foi]])) +
+  geom_boxplot(linewidth = unit(0.25, units = "mm"), outlier.size = 0.15) + theme_classic() + 
+  ylab("Sqrt Abundance") +
+  ggtitle("PWY-7328") +
+  scale_fill_manual(values = c("#FCE4F9","#E8C7F9", "#BEB1FF", "#6551CC")) +
+  scale_y_continuous(breaks = c(0.04, 0.06)) +
+  theme(legend.position = "none",
+        aspect.ratio = NULL,
+        axis.title.x = element_blank(),
+        axis.title.y = element_text(size = 4.5, margin = margin(r = 0.25, unit = "mm")),
+        axis.text = element_text(size = 5),
+        axis.text.y = element_text(angle = 0, margin = margin(l = 0.25, r = 0, unit = "mm"), hjust = 0.5, color = "black"),
+        axis.text.x = element_blank(),
+        axis.line = element_line(linewidth = unit(0.25, units = "mm")),
+        axis.ticks.y = element_line(linewidth = unit(0.25, units = "mm")),
+        axis.ticks.x = element_blank(),
+        axis.ticks.length.y = unit(0.5, units = "mm"),
+        plot.margin = margin(l = 0.5, b = 0.5, r = 0.5, t = 0.5, unit = "mm"),
+        plot.background = element_rect(color = "black", linewidth = unit(0.25, units = "mm")),
+        plot.title = element_text(size = 5, hjust = 0.5, margin = margin(unit = "mm")))
+plt.inset.fig3f
+
+
+# Modifying DA Plots ----
+
+# Holder -> fig.3e = ggplot() + theme_void() 
+obj.w = output$NAC_Response_age_subtypeadj_Taxonomic_Species
+
+
+#prep table
+prep = da_plt_prep(obj = obj.w, type = "auto", cuts = c(0.05, 0.15),
+                   label.crit = c("x < 0.15"), ntop = 10)
+#grab mean abundances and add to prep table
+#abund_w = get_abund(feature.dat = obj.w$output$test.object$feature.dat, type = "count")
+
+abund_w = norm.fxn(object = obj.w) %>% colMeans()
+
+#abund_w = data.frame(nm = names(abund_w), abundance = abund_w)
+
+abund_w = data.frame(nm = gsub(pattern = "\\.", replacement = "-", x = names(abund_w)), abundance = abund_w)
+prep$df = left_join(prep$df, abund_w, by = c("Feature_W" = "nm"))
+
+#prep palette
+levels(prep$df$signif_level)
+prep$df$signif_level %>% unique()
+
+pal.w = da.pal.master[prep$df$signif_level %>% unique()]
+
+## Plotting ----
+
+plt.w = da_plt(obj.prep = prep, type = "auto",
+               pt.color = pal.w,
+               pt.size = da.pt.size,
+               legend.tf = da.legend.tf,
+               xlab.size = da.xlab.sz,
+               ylab.size = da.ylab.sz, text.size=plt.axis.sz,
+               tick.size = da.tick.sz,
+               label.size.param = da.label.size.param,
+               box.pad.size = da.box.pad.size, 
+               point.pad.size = da.point.pad.size,
+               max.overlaps.param = da.max.overlaps.param,
+               max.iter.param = da.max.iter.param,
+               max.time.param = da.max.time.param,
+               force.param = da.force.param,
+               force.pull.param = da.force.pull.param)
+
+fig.3e = plt.w 
+
+
+
+
+
+
+## Main Plot Theme Adj ----
+plt.da.list = list(fig.3d, fig.3e, fig.3f)
+plt.da.list[2:3] = lapply(plt.da.list[2:3], function(plt.tmp){
+  plt.tmp = plt.tmp +
+    theme(aspect.ratio = 1, 
+          axis.line = element_line(linewidth = unit(0.25, units = "mm")),
+          axis.ticks = element_line(linewidth = unit(0.25, units = "mm")),
+          axis.ticks.length = unit(0.5, units = "mm"),
+          axis.title.y = element_text(vjust = 1.5),
+          axis.title.x = element_text(vjust = 1.25),
+          plot.margin = margin(l = 0, b = 0, r = 0, t = 0, unit = "mm"))
+  op = plt.tmp
+  return(op)
+})
+
+#check sizing
+plt.da.list[[1]] + canvas(width = 56, height = 56, units = "mm", dpi = 300)
+plt.da.list[[2]] + canvas(width = 56, height = 56, units = "mm", dpi = 300)
+plt.da.list[[3]] + canvas(width = 56, height = 56, units = "mm", dpi = 300)
+
+
+## Add Insets ----
+
+### Inset Fig 3F ----
+
+#get dimensions of inset
+dim.inset.fig3f = get_window(x = 0.5,
+                             y = 0.33,
+                             bl.x = 0.1,
+                             bl.y = 0.63,
+                             plt = plt.da.list[[3]])
+
+
+#convert inset to grob
+grob.plt.inset.fig3f = ggplotGrob(plt.inset.fig3f)
+
+#set zoom dimensions
+zoomdata.fig3f <- data.frame(x = c(-0.0081160880+0.0001, dim.inset.fig3f$xmin, dim.inset.fig3f$xmax, -0.0081160880+0.0001),
+                             y = c(-log10(0.00041), dim.inset.fig3f$ymax, dim.inset.fig3f$ymax, -log10(0.00041)))
+
+#plot 
+fig3f.winset = plt.da.list[[3]] +
+  with_shadow(geom_rect(aes(xmin = dim.inset.fig3f$xmin,
+                            xmax = dim.inset.fig3f$xmax,
+                            ymin = dim.inset.fig3f$ymin,
+                            ymax = dim.inset.fig3f$ymax),
+                        fill = "red",
+                        linewidth = unit(0, "mm")),
+              sigma = 3,
+              x_offset = 3,
+              y_offset = 3)  +
+  geom_polygon(data = zoomdata.fig3f, aes(x, y),
+               fill = "gray90", alpha = 1, color = "black", linewidth = unit(0, "mm")) +
+  annotation_custom(grob = grob.plt.inset.fig3f,
+                    xmin = dim.inset.fig3f$xmin, xmax = dim.inset.fig3f$xmax,
+                    ymin = dim.inset.fig3f$ymin, ymax = dim.inset.fig3f$ymax)
+
+
+
+
+#check size
+#fig3f.winset + canvas(width = 56, height = 56, units = "mm", dpi = 300)
+
+## Add Panel Labels ----
+
+#grab letters for panels
+panel.labs = LETTERS[4:6]
+
+#grab plots we want to add letters to
+toaddlabs = list(plt.da.list[[1]], plt.da.list[[2]], fig3f.winset )
+
+#add letters and adjust margins where needed
+withlabs = lapply(1:length(toaddlabs), function(i){
+  plt.tmp = toaddlabs[[i]]
+  lab.tmp = panel.labs[i]
+  plt.tmp = plt.tmp +
+    labs(tag = lab.tmp) +
+    theme(plot.margin = margin(l = 3, b = 0, r = 0, t = 0, unit = "mm"),
+          plot.tag = element_text(size = 10, hjust = 1, vjust = 1),
+          plot.tag.location = "plot", 
+          plot.tag.position = c(0,1))
+  return(plt.tmp)
+})
+
+
+
+# Legends ----
+
+## Fig 3C Legend ----
+
+### Set Up ----
+df.asterisk = data.frame(
+  x = rep(1, times = 1),
+  y = factor(c(1), levels = 1, ordered=T),
+  fill.col = factor(c("p < 0.05"), ordered = T, levels = c("p < 0.05")))
+
+### Dummy Plot ----
+dummy.legend.alpha = ggplot() + 
+  geom_point(data = df.asterisk, aes(x = x, y = y, color = fill.col), size = 2, shape = "\u273B") +
+  scale_color_manual(values = c("black")) +
+  theme_bw()
+
+### Format ----
+dummy.format.legend.alpha = dummy.legend.alpha+ 
+  theme(legend.title = element_blank(),
+        legend.text = element_text(size = 6, margin = margin(t = 0, r = 0, b = 0, l = 0, unit = "mm")),
+        legend.margin = margin(t = 0, r = 0, b = 0, l = 0, unit = "mm"),
+        legend.box.spacing = unit(0, "mm"),
+        legend.box.margin = margin(t = 0, r = 0, b = 0, l = 0, unit = "mm"),
+        legend.key.height = unit(3, "mm"),
+        legend.key.width = unit(4, "mm")) 
+dummy.format.legend.alpha
+
+### Extract Legend ----
+
+#grab legend
+legend.alpha = dummy.format.legend.alpha %>% 
+  get_legend()
+legend.alpha = legend.alpha %>% 
+  as_ggplot()
+
+#final touches 
+legend.alpha = legend.alpha +
+  theme(plot.margin = margin(t = -4, r = legend.alpha.rmargin, b = 0, l = 0, unit = "mm"))
+
+## DA Plot Legend ----
+
+### Set Up ----
+
+df.better = data.frame(
+  x = rep(1, times = 2),
+  y = factor(c(1:2), levels = 1:3, ordered=T),
+  fill.col = factor(c("q < 0.15","q \u2265 0.15"), ordered = T, levels = c("q < 0.05", "q < 0.15","q \u2265 0.15")))
+df.dummy = data.frame(x = 1, y = 1)
+df.bp = data.frame(x = rnorm(n = 100, mean = 0, sd = 1),
+                   group = factor(c(rep(1, times = 25), rep(2, times = 25), rep(3, times = 25), rep(4, times = 25)), levels = c(1:4)),
+                   fill.col = factor(c(rep("RCB-0", times = 25), rep("RCB-1", times = 25), rep("RCB-2", times = 25), rep("RCB-3", times = 25)), levels = c("RCB-0", "RCB-1", "RCB-2", "RCB-3")))
+
+### Dummy Plot ----
+dummy.legend.da = ggplot() + 
+  geom_point(data = df.better, aes(x=x, y = y, color = fill.col), size = 1) +
+  geom_point(data = df.dummy, aes(x=x, y = y, size = "high1"), color = "gray75") +
+  geom_point(data = df.dummy, aes(x=x, y = y, size = "high2"), color = "#eea8ba") +
+  geom_boxplot(data = df.bp, aes(x = x, fill = fill.col)) +
+  theme_bw() +
+  scale_color_manual("\u2193 With Burden", 
+                     values = c("#98ab76", "gray75"), #8AB833 green
+                     guide=guide_legend(order=1)) +
+  scale_size_manual(
+    "\u2191 With Burden", 
+    values=rep(1,3),
+    guide=guide_legend(order = 2, override.aes = list(colour=c("#c62320", "gray75"))), #eea8ba red
+    labels=c("q < 0.15","q \u2265 0.15")) +
+  scale_fill_manual("Inset", values = c("#FCE4F9","#E8C7F9", "#BEB1FF", "#6551CC"))
+dummy.legend.da 
+
+### Format ----
+
+dummy.format.legend.da = dummy.legend.da + 
+  theme(legend.title = element_text(size = 7, face = "bold", margin = margin(t = 0, r = 4, b = 0, l = 0, unit = "mm")),
+        legend.text = element_text(size = 6, margin = margin(t = 0, r = 0, b = 0, l = 0, unit = "mm")),
+        legend.margin = margin(t = 0, r = 0, b = 0, l = 0, unit = "mm"),
+        legend.box.spacing = unit(0, "mm"),
+        legend.box.margin = margin(t = 0, r = 0, b = 0, l = 0, unit = "mm"),
+        legend.key.height = unit(3, "mm"),
+        legend.key.width = unit(4, "mm"),
+        legend.direction = "horizontal", 
+        legend.position = "bottom",
+        legend.spacing = unit(10, "mm")) 
+dummy.format.legend.da
+
+### Extract Legend ----
+
+#grab legend
+legend.da = dummy.format.legend.da %>% 
+  get_legend()
+legend.da = legend.da %>% 
+  as_ggplot()
+
+#final touches 
+# legend.da = legend.da +
+#   theme(plot.margin = margin(t = 0, r = -1, b = 0, l = -5, unit = "mm"))
+legend.da = legend.da +
+  theme(plot.margin = margin(t = 0, r = 0, b = 0, l = 0, unit = "mm"))
+
+#check size
+legend.da + canvas(height = 5, width = 170, units = "mm", dpi = 300)
+
+# Print to PNG ----
+
+## Alt ----
+
+### Layout Matrix ----
+
+#nrow (height) should be 210, ncol (width) should be 170
+layout.mat = matrix(data = NA, nrow = 134, ncol = 170)
+layout.mat[1:28,1:130] = 1 #delineation
+layout.mat[29:76,1:130] = 2 #chemo schema 45 height x 130 width
+layout.mat[1:35,131:165] = 3 #alpha div 1
+layout.mat[36:70,131:165] = 4 #alpha div 2
+layout.mat[71:76, 131:165] = 5 # alpha div legend
+layout.mat[77:129,1:56] = 6 #d
+layout.mat[77:129,57:112] = 7 #e
+layout.mat[77:129,113:168] = 8 #f
+layout.mat[77:129,169:170] = 9 #spacer
+layout.mat[130:134,1:170] = 10 #da legend
+
+# layout.mat = matrix(data = NA, nrow = 134, ncol = 170)
+# layout.mat[1:28,1:120] = 1 #delineation
+# layout.mat[29:76,1:120] = 2 #chemo schema 45 height x 130 width
+# layout.mat[1:36,121:160] = 3 #alpha div 1
+# layout.mat[37:72,121:160] = 4 #alpha div 2
+# layout.mat[73:76, 131:170] = 5 # alpha div legend
+# layout.mat[77:129,1:56] = 6 #d
+# layout.mat[77:129,57:112] = 7 #e
+# layout.mat[77:129,113:168] = 8 #f
+# layout.mat[77:129,169:170] = 9 #spacer
+# layout.mat[130:134,1:170] = 10 #da legend
+
+#check layout
+gs <- lapply(1:10, function(ii) 
+  grobTree(rectGrob(gp=gpar(fill=ii, alpha=0.5)), textGrob(ii)))
+grid.arrange(grobs = gs, layout_matrix = layout.mat)
+
+### Plot List ----
+
+#spacer set up
+plt.spacer = ggplot() + theme_void()
+
+#list plots including spacers and convert to grobs
+list.grob = list(fig.3a, 
+                 fig.3b,
+                 alpha.plt.list[[1]], 
+                 alpha.plt.list[[2]],
+                 legend.alpha,
+                 withlabs[[1]], 
+                 withlabs[[2]],
+                 withlabs[[3]], 
+                 plt.spacer,
+                 legend.da)
+list.grob = lapply(list.grob, ggplotGrob)
+
+# list.grob[[1]] = rasterGrob(fig.3a)
+# list.grob[[2]] = fig.3b
+
+### Print ----
+png("../figures/Figure3.png", 
+    width = 170, 
+    height = 134, 
+    res = 300, 
+    units = "mm")
+grid.arrange(grobs = list.grob, layout_matrix = layout.mat)
+dev.off()
